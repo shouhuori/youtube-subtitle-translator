@@ -33,3 +33,6 @@ User explicitly requested implementation and clarified this is only another clie
 Review: independent read-only reviewer identified an Alt shortcut guard left over from LingRead. Reproduced with a failing keyboard behavior test, removed the Alt guard and switched to KeyboardEvent.code for macOS compatibility; regression passes.
 
 Ruling: retain the original LingRead checkout unchanged for this migration stage. The optional old-entry removal choice received no answer during implementation. Existing clients remain compatible, but simultaneous old/new extension UI and old relay behavior require follow-up before migration release.
+
+
+Follow-up: user explicitly requested removing all legacy YouTube entry points. LingRead 1.9.19 removes them and isolates relay callbacks/tabs by client. This supersedes the temporary keep-old-entry ruling above.
