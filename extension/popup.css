@@ -1,0 +1,29 @@
+:root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #292329; background: #fff; }
+* { box-sizing: border-box; }
+body { width: 352px; margin: 0; }
+header { display: flex; align-items: center; gap: 12px; padding: 24px 22px 20px; border-bottom: 1px solid #f1e8e8; }
+header img { flex: none; }
+h1 { font-size: 15px; line-height: 1.35; font-weight: 700; margin: 0 0 3px; letter-spacing: -.3px; }
+header p { color: #837579; font-size: 12px; margin: 0; }
+main { padding: 19px 22px 0; }
+.intro { margin: 0 0 17px; font-size: 13px; color: #6b6065; }
+button { font: inherit; cursor: pointer; border: 0; transition: background .15s; }
+button:focus-visible { outline: 3px solid #f19a9e; outline-offset: 3px; }
+button:disabled { opacity: .6; cursor: wait; }
+.primary, .secondary { display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 13px 15px; border-radius: 10px; font-size: 14px; font-weight: 600; }
+.primary { background: #e82736; color: #fff; }
+.primary:hover { background: #cf1f2d; }
+.secondary { background: #fff4f4; border: 1px solid #f3d6d8; margin-top: 10px; color: #9e2330; }
+.secondary:hover { background: #ffe9eb; }
+.hint { color: #8b7c80; font-size: 11px; line-height: 1.8; margin: 12px 1px 20px; }
+#status { color: #9e2330; background: #fff4f4; border-radius: 6px; padding: 10px; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.account { border-top: 1px solid #f1e8e8; padding-top: 17px; display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.account div { min-width: 0; }
+.eyebrow { font-size: 10px; font-weight: 600; letter-spacing: 1px; color: #9a8b90; }
+#accountLabel { font-size: 12px; margin: 5px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.small { background: #f5f2f3; border-radius: 6px; padding: 7px 11px; color: #5c4e54; font-size: 12px; white-space: nowrap; }
+.shared { color: #9a8b90; font-size: 10px; margin: 10px 0 18px; }
+footer { display: flex; align-items: center; gap: 9px; padding: 13px 22px; background: #faf8f8; color: #c1b7ba; font-size: 11px; }
+footer button { padding: 0; color: #796c71; font-size: 11px; background: none; }
+#version { margin-left: auto; font-size: 10px; }
+[hidden] { display: none !important; }

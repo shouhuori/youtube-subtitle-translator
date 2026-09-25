@@ -1,0 +1,21 @@
+{
+  "name": "youtube-subtitle-translator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "YouTube Subtitle Translator, Transcript & Summary — a LingRead client",
+  "scripts": {
+    "test": "vitest run",
+    "check": "node scripts/check.mjs",
+    "icons": "node scripts/generate-icons.mjs",
+    "build": "node scripts/build.mjs",
+    "build:dev": "node scripts/build.mjs --dev",
+    "test:browser": "node scripts/browser-smoke.mjs"
+  },
+  "devDependencies": {
+    "jszip": "3.10.1",
+    "playwright-core": "1.63.0",
+    "sharp": "0.34.5",
+    "vitest": "^3.2.0"
+  }
+}
