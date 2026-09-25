@@ -25,9 +25,11 @@
   let subtitleTask = null; // { taskId, status, totalSegments, completedSegments, ... }
   let subtitleTaskFromAuth = false;
   let cachedSubtitleItemsReady = false;
+  let cachedSubtitleItemsIncomplete = false;
   let cachedSubtitleItemsCount = 0;
   let subtitleTakeoverVideoId = null;
   let taskPollTimer = null;
+  let subtitleStateRequestId = 0;
   let pendingSubtitleFetchAfterLogin = false;
   let subtitleSelectionRequest = null;
   let chapterTranslations = new Map();
@@ -989,6 +991,8 @@
     subtitleTask = null;
     subtitleTaskFromAuth = false;
     cachedSubtitleItemsReady = false;
+    cachedSubtitleItemsIncomplete = false;
+    subtitleStateRequestId++;
     cachedSubtitleItemsCount = 0;
     subtitleTakeoverVideoId = null;
     subtitleSelectionRequest = null;
@@ -1615,26 +1619,73 @@
     }, 6000);
   }
 
+  // 重新断句会改变 cue 数量和边界，因此核对时间覆盖，而不是比较条目数。
+  // 只核对原字幕的有声区间，保留视频本来的无字幕间隙。
+  function hasCompleteSubtitleCoverage(source, items) {
+    if (!Array.isArray(source) || !source.length) return false;
+    const ranges = items
+      .filter(item => item && Number.isFinite(item.start) && Number.isFinite(item.end)
+        && item.end > item.start && typeof item.translation === 'string' && item.translation.trim())
+      .map(item => ({ start: Math.round(item.start * 1000), end: Math.round(item.end * 1000) }))
+      .sort((a, b) => a.start - b.start);
+    const merged = [];
+    for (const range of ranges) {
+      const last = merged[merged.length - 1];
+      if (last && range.start <= last.end + 1) last.end = Math.max(last.end, range.end);
+      else merged.push({ ...range });
+    }
+    let index = 0;
+    for (const cue of [...source].sort((a, b) => a.start - b.start)) {
+      if (!Number.isFinite(cue.start) || !Number.isFinite(cue.end) || cue.end <= cue.start) return false;
+      const start = Math.round(cue.start * 1000);
+      const end = Math.round(cue.end * 1000);
+      while (index < merged.length && merged[index].end < start - 1) index++;
+      if (!merged[index] || merged[index].start > start + 1 || merged[index].end < end - 1) return false;
+    }
+    return true;
+  }
+
   // 拉取该视频已翻译字幕 + 最新任务摘要：把字幕推给渲染器，更新面板与按钮提示，
   // 并按任务状态启停轮询。任务在服务端后台跑，关掉面板/页面不影响。
   async function refreshSubtitleState(videoId) {
     if (!videoId || getVideoIdFromUrl() !== videoId) return false;
+    const requestId = ++subtitleStateRequestId;
+    const isCurrent = () => requestId === subtitleStateRequestId && getVideoIdFromUrl() === videoId;
     try {
       const hasAuthToken = !!(await getAuthTokenLocal());
       const data = await apiFetch(`/api/youtube/subtitle/${encodeURIComponent(videoId)}?targetLanguage=zh-Hans`, { method: 'GET' });
-      if (getVideoIdFromUrl() !== videoId) return;
+      if (!isCurrent()) return false;
       const items = Array.isArray(data.items) ? data.items : [];
-      subtitleTask = hasAuthToken ? data.task || null : null;
+      const task = hasAuthToken ? data.task || null : null;
+      const mayBeComplete = items.length > 0 && (!task || task.status === 'completed');
+      let shouldRenderContext = false;
+      let sourceContext = currentContext?.videoId === videoId && !currentContext.subtitles?.fromCache
+        ? currentContext : null;
+      if (mayBeComplete && !sourceContext?.subtitles?.segments?.length) {
+        // 删除任务或匿名访问都会拿到 task:null；缓存本身不能证明翻译已完成。
+        // 不能拿由该缓存生成的 context 来验证自身，必须读取原始字幕轨。
+        const nativeContext = await buildContext();
+        if (!isCurrent()) return false;
+        if (nativeContext?.videoId === videoId && nativeContext.subtitles?.segments?.length) {
+          sourceContext = currentContext = nativeContext;
+          broadcastContext(currentContext);
+          shouldRenderContext = true;
+        }
+      }
+      subtitleTask = task;
       subtitleTaskFromAuth = hasAuthToken && !!subtitleTask;
-      const failedTask = subtitleTask?.status === 'failed';
-      const usableItems = failedTask ? [] : items;
-      cachedSubtitleItemsReady = usableItems.length > 0
-        && (!subtitleTask || subtitleTask.status === 'completed');
+      cachedSubtitleItemsReady = mayBeComplete
+        && hasCompleteSubtitleCoverage(sourceContext?.subtitles?.segments, items);
+      cachedSubtitleItemsIncomplete = mayBeComplete
+        && !!sourceContext?.subtitles?.segments?.length && !cachedSubtitleItemsReady;
+      // 无法读取原轨时是校验失败，不是缺少译文；不要误建重复翻译任务。
+      if (mayBeComplete && !sourceContext?.subtitles?.segments?.length) return false;
+      const inProgress = task && ['pending', 'running'].includes(task.status);
+      const usableItems = cachedSubtitleItemsReady || inProgress ? items : [];
       cachedSubtitleItemsCount = usableItems.length;
-      if (failedTask && currentContext?.videoId === videoId && currentContext.subtitles?.fromCache) {
+      if (!usableItems.length && currentContext?.videoId === videoId && currentContext.subtitles?.fromCache) {
         currentContext = null;
       }
-      let shouldRenderContext = false;
       if (usableItems.length) {
         const hasUsableContext =
           currentContext
@@ -1672,7 +1723,7 @@
       return true;
     } catch (_e) {
       // 后台刷新失败保持静默；主动选择模式时由调用方显示重试提示。
-      if (getVideoIdFromUrl() === videoId) subtitleTaskFromAuth = false;
+      if (isCurrent()) subtitleTaskFromAuth = false;
       return false;
     }
   }
@@ -1709,7 +1760,7 @@
       openVideoInDashboard(currentVid);
       return;
     }
-    if (!c || c.videoId !== currentVid || !c.subtitles || !Array.isArray(c.subtitles.segments) || !c.subtitles.segments.length) {
+    if (!c || c.videoId !== currentVid || !c.subtitles || c.subtitles.fromCache || !Array.isArray(c.subtitles.segments) || !c.subtitles.segments.length) {
       c = await buildContext();
       if (!isCurrent() || getVideoIdFromUrl() !== currentVid) return;
       if (c && c.videoId === currentVid) currentContext = c;
@@ -1839,6 +1890,10 @@
       && currentContext.videoId
       && subtitleTakeoverVideoId === currentContext.videoId
     );
+    if (cachedSubtitleItemsIncomplete) {
+      setStatus('字幕翻译不完整，重新选择双语或仅中文可继续翻译', true);
+      return;
+    }
     if (cachedSubtitleItemsReady && !takeoverActive) {
       setStatus('');
       return;

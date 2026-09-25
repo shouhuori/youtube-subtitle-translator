@@ -405,13 +405,25 @@
       && Array.isArray(newContext.subtitles.segments)
         ? newContext.subtitles.segments
         : [];
-    if (sameVideo && hadSegments && nextSegments.length > 0) {
+    const upgradingCachedContext = sameVideo && hadSegments && nextSegments.length > 0
+      && context.subtitles.fromCache && !newContext.subtitles.fromCache;
+    if (sameVideo && hadSegments && nextSegments.length > 0 && !upgradingCachedContext) {
       context = newContext;
       applyHideNative();
       return;
     }
+    // 首次轮询可能只拿到部分译文；完整原始轨到达时补全时间轴，并保留
+    // 用户的字幕模式接管和已经加载的译文（最终断句可覆盖多个原始 cue）。
+    const previousTranslations = upgradingCachedContext
+      ? Array.from(subtitleStore.values()).filter(item => item.translation) : [];
+    const previousTakeoverVideoId = takeoverVideoId;
+    const previousTaskStatus = taskStatus;
     reset();
     context = newContext || null;
+    if (upgradingCachedContext) {
+      takeoverVideoId = previousTakeoverVideoId;
+      taskStatus = previousTaskStatus;
+    }
     if (!context || !nextSegments.length) {
       return;
     }
@@ -428,6 +440,7 @@
       });
     }
     rebuildSubtitleTimeline();
+    if (previousTranslations.length) ingestItems(context.videoId, previousTranslations);
 
     applyHideNative();
     videoEl = findVideoElement() || (await waitForVideoElement());

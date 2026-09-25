@@ -52,6 +52,13 @@ function loadPlayer({ items = [], task = null, token = 'token', failRead = false
       select: setSubtitleMode,
       resume: resumeSubtitleFetchAfterLogin,
       title: ensureVideoTitleTranslation,
+      useCachedContext() {
+        const loadedContext = currentContext;
+        currentContext = { videoId: 'video-1', subtitles: {
+          fromCache: true, segments: [{ start: 0, end: 1, text: 'Partial' }]
+        } };
+        buildContext = async () => loadedContext;
+      },
       clearContext() {
         const loadedContext = currentContext;
         currentContext = null;
@@ -96,6 +103,16 @@ describe('YouTube subtitle mode selection', () => {
     await p.select('target');
     expect(posts(p)).toHaveLength(1);
     expect(JSON.parse(posts(p)[0].body)).toMatchObject({ videoId: 'video-1', force: false });
+    expect(dashboards(p)).toHaveLength(1);
+  });
+  it.each([null, { taskId: 'old-task', status: 'canceled' }])('retries partial caches with the complete original track when task is %j', async task => {
+    const p = loadPlayer({ items: [{ start: 0, end: 1, text: 'Partial', translation: '部分' }], task });
+    p.useCachedContext();
+    await p.select('target');
+    expect(posts(p)).toHaveLength(1);
+    expect(JSON.parse(posts(p)[0].body)).toMatchObject({
+      force: false, subtitles: [{ start: 0, end: 2, text: 'Hello' }],
+    });
     expect(dashboards(p)).toHaveLength(1);
   });
   it.each(['source', 'off'])('does not fetch or open translation for %s', async (mode) => {

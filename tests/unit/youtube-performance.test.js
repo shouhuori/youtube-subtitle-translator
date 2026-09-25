@@ -25,6 +25,8 @@ function loadSubtitleTimeline() {
   const rebuild = extractFunction(subtitleSource, 'rebuildSubtitleTimeline');
   const find = extractFunction(subtitleSource, 'findCurrentSubtitle');
   const ingest = extractFunction(subtitleSource, 'ingestItems');
+  const setContext = extractFunction(subtitleSource, 'setContext');
+  const reset = extractFunction(subtitleSource, 'reset');
 
   return new Function(`
     const subtitleStore = new Map();
@@ -33,11 +35,18 @@ function loadSubtitleTimeline() {
     let lastTimelineIndex = -1;
     let videoEl = { currentTime: 0 };
     let context = { videoId: 'video-1' };
+    let takeoverVideoId = null, lastRenderedKey = '', taskStatus = null, videoBound = false;
+    const LAYER_ID = 'layer', HIDE_NATIVE_CLASS = 'hidden';
+    const document = { getElementById: () => null, querySelector: () => null };
+    const findVideoElement = () => ({ currentTime: 0 });
+    const bindVideoEvents = () => {}, render = () => {}, applyHideNative = () => {}, dispatchStatus = () => {};
     const scheduleRender = () => {};
     const startKey = (s) => String(Math.round(Number(s) * 1000));
     ${rebuild}
     ${find}
     ${ingest}
+    ${reset}
+    ${setContext}
     return {
       seed(items) {
         subtitleStore.clear();
@@ -48,6 +57,9 @@ function loadSubtitleTimeline() {
       find: findCurrentSubtitle,
       ingest: (items) => ingestItems('video-1', items),
       items: () => Array.from(subtitleStore.values()).sort((a, b) => a.start - b.start),
+      setContext,
+      activate() { takeoverVideoId = context.videoId; },
+      active: () => takeoverVideoId,
     };
   `)();
 }
@@ -298,6 +310,24 @@ describe('YouTube low-overhead runtime', () => {
     expect(timeline.find().text).toBe('next');
     timeline.setTime(1);
     expect(timeline.find().text).toBe('outer');
+  });
+
+  it('restores the full source timeline after initially loading only an incremental cache', async () => {
+    const timeline = loadSubtitleTimeline();
+    await timeline.setContext({ videoId: 'video-1', subtitles: {
+      fromCache: true, segments: [{ start: 0, end: 2, text: 'cached' }],
+    } });
+    timeline.activate();
+    timeline.ingest([{ start: 0, end: 2, text: 'corrected', translation: '译文' }]);
+    await timeline.setContext({ videoId: 'video-1', subtitles: { segments: [
+      { start: 0, end: 1, text: 'first' }, { start: 1, end: 2, text: 'second' },
+      { start: 635.84, end: 637, text: 'ending' },
+    ] } });
+    timeline.setTime(636);
+    expect(timeline.find()?.text).toBe('ending');
+    timeline.setTime(1.5);
+    expect(timeline.find()?.translation).toBe('译文');
+    expect(timeline.active()).toBe('video-1');
   });
 
   it('merges corrected subtitle ranges without a nested full-map scan', () => {
