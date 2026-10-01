@@ -4,7 +4,7 @@ import vm from 'node:vm';
 import { describe, expect, it } from 'vitest';
 
 const source = readFileSync(resolve(import.meta.dirname, '../../extension/content-youtube.js'), 'utf8');
-function loadPlayer({ items = [], task = null, token = 'token', nativeLanguage = 'zh-Hans', sourceLanguage = 'en', sourceSegments = [{ start: 0, end: 2, text: 'Hello' }], failRead = false, pauseRead, pausePost, onPost, pauseCreate, onCreate, created = {}, quote = {}, quoteError = 0 } = {}) {
+function loadPlayer({ items = [], task = null, token = 'token', nativeLanguage = 'zh-Hans', sourceLanguage = 'en', sourceSegments = [{ start: 0, end: 2, text: 'Hello' }], failRead = false, pauseRead, pausePost, onPost, pauseCreate, onCreate, created = {}, quote = {}, quoteError = 0, subtitlesCleared = false } = {}) {
   const requests = [];
   const events = [];
   const status = { textContent: '', classList: { add() {}, remove() {}, toggle() {} } };
@@ -25,7 +25,7 @@ function loadPlayer({ items = [], task = null, token = 'token', nativeLanguage =
             if (pauseRead) await pauseRead;
             if (failRead) return { error: true, status: 503, message: 'Unavailable' };
             const target = new URL(message.path, 'https://lingread.app').searchParams.get('targetLanguage');
-            return { data: { videoId: 'video-1', targetLanguage: target, items: typeof items === 'function' ? items(target) : items, task, terminology: [] } };
+            return { data: { videoId: 'video-1', targetLanguage: target, items: typeof items === 'function' ? items(target) : items, task, terminology: [], subtitlesCleared } };
           }
           if (message.method === 'POST') {
             onPost?.();
@@ -83,7 +83,7 @@ function loadPlayer({ items = [], task = null, token = 'token', nativeLanguage =
   vm.runInNewContext(readFileSync('extension/languages.js', 'utf8'), sandbox);
   sandbox.window.YST_LANGUAGES = sandbox.YST_LANGUAGES;
   vm.runInNewContext(exposed, sandbox);
-  return { ...sandbox.player, requests, events, status, respondWith(value) { items = value.items; task = value.task; }, login: () => { token = 'new-token'; }, navigate: () => { sandbox.location.search = '?v=video-2'; } };
+  return { ...sandbox.player, requests, events, status, respondWith(value) { items = value.items; task = value.task; subtitlesCleared = !!value.subtitlesCleared; }, login: () => { token = 'new-token'; }, navigate: () => { sandbox.location.search = '?v=video-2'; } };
 }
 const translated = [{ start: 0, end: 2, text: 'Hello', translation: '你好' }];
 const dashboards = (p) => p.requests.filter((r) => r.action === 'nav:openHistory');
@@ -459,4 +459,27 @@ it.each([401, 503])('ignores a late %s quote failure after full captions become 
   expect(p.status.innerHTML).not.toContain('重试');
   expect(p.events.some(e => e.type === 'yst:yt:activate-subtitles')).toBe(true);
   expect(p.requests.some(r => r.action === 'auth:startRelay')).toBe(false);
+});
+it('clears loaded subtitles after library deletion without starting or quoting a translation', async () => {
+  const p = loadPlayer({ items: translated, task: { status: 'completed' } });
+  await p.select('bilingual');
+  const before = posts(p).length;
+  p.respondWith({ items: [], task: null, subtitlesCleared: true });
+  await p.refresh();
+  expect(p.events.filter(event => event.type === 'yst:yt:subtitles-cleared').at(-1)?.detail)
+    .toMatchObject({ videoId: 'video-1', targetLanguage: 'zh-Hans' });
+  const clearedIndex = p.events.findLastIndex(event => event.type === 'yst:yt:subtitles-cleared');
+  const restoredIndex = p.events.findLastIndex(event => event.type === 'yst:yt:context-ready');
+  expect(restoredIndex).toBeGreaterThan(clearedIndex);
+  expect(p.events[restoredIndex].detail.subtitles.segments).toEqual([{ start: 0, end: 2, text: 'Hello' }]);
+  expect(posts(p)).toHaveLength(before);
+  expect(p.quote()).toBeNull();
+  await p.select('target');
+  expect(posts(p).at(-1).path).toBe('/api/youtube/subtitle/quote');
+  await p.confirm();
+  const activatedIndex = p.events.findLastIndex(event => event.type === 'yst:yt:activate-subtitles');
+  expect(activatedIndex).toBeGreaterThan(restoredIndex);
+  p.respondWith({ items: translated, task: { taskId: 'task-1', status: 'completed' } });
+  await p.refresh();
+  expect(p.events.filter(event => event.type === 'yst:yt:subtitles-data').at(-1)?.detail.items).toEqual(translated);
 });

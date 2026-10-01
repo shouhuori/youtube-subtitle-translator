@@ -1707,6 +1707,26 @@
       if (!isCurrent()) return false;
       const items = Array.isArray(data.items) ? data.items : [];
       const task = hasAuthToken ? data.task || null : null;
+      // A deleted library video must also release the in-memory translated track.
+      // Keep a new explicit selection alive so the user can request a fresh quote.
+      if (!items.length && (data.subtitlesCleared === true || (!task && cachedSubtitleItemsCount > 0))) {
+        const hadLoadedTranslation = cachedSubtitleItemsCount > 0 || !!subtitleTask;
+        subtitleTakeoverVideoId = null;
+        if (hadLoadedTranslation) {
+          subtitleSelectionRequest = null;
+          subtitleStartRequest = null;
+          subtitleQuote = null;
+          subtitleActionError = '';
+          pendingSubtitleFetchAfterLogin = false;
+        }
+        try {
+          window.dispatchEvent(new CustomEvent('yst:yt:subtitles-cleared', { detail: { videoId, targetLanguage } }));
+        } catch (_e) {}
+        if (currentContext?.videoId === videoId && !currentContext.subtitles?.fromCache) {
+          broadcastContext(currentContext);
+        }
+      }
+
       // 翻译与后续校正/断句是不同阶段。后处理失败或取消不代表已写入的
       // 完整译文不可用；终止任务也必须按原轨核对覆盖，不能仅凭任务状态丢弃。
       const mayBeComplete = items.length > 0 && (!task || ['completed', 'failed', 'canceled'].includes(task.status));

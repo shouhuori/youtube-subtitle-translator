@@ -11,6 +11,7 @@
 // 事件（与 content-youtube.js 通过 window CustomEvent 通信）：
 //   in:  yst:yt:context-ready   { detail: VideoContext }      // 原文就位
 //        yst:yt:subtitles-data  { detail: { videoId, targetLanguage, items } } // 译文增量
+//        yst:yt:subtitles-cleared { detail: { videoId, targetLanguage } }
 //        yst:yt:context-cleared
 //        yst:yt:set-mode        { detail: { mode } }
 //        yst:yt:activate-subtitles { detail: { videoId } }      // 用户主动接管字幕
@@ -483,6 +484,14 @@
     if (!d) return;
     if (d.targetLanguage && context?.targetLanguage && d.targetLanguage !== context.targetLanguage) return;
     ingestItems(d.videoId, d.items);
+  });
+
+  window.addEventListener('yst:yt:subtitles-cleared', (e) => {
+    const d = e && e.detail;
+    if (!d || !context || d.videoId !== context.videoId) return;
+    if (d.targetLanguage && context.targetLanguage && d.targetLanguage !== context.targetLanguage) return;
+    reset();
+    context = null;
   });
 
   window.addEventListener('yst:yt:task-state', (e) => {

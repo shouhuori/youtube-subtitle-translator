@@ -60,3 +60,28 @@ it('repaints corrected content even when its starting time and translation prese
   expect(html).toContain('>同一件衬衫</div>');
   expect(html).toContain('>the same shirt</div>');
 });
+it('clears translated timeline and restores native captions only for the matching video and language', () => {
+  const handlers = new Map();
+  const removed = [];
+  const sandbox = {
+    window: { addEventListener: (name, handler) => handlers.set(name, handler), dispatchEvent() {} },
+    document: { addEventListener() {}, getElementById: () => ({ remove: () => removed.push('layer') }), querySelector: () => ({ classList: { remove: value => removed.push(value) } }) },
+    chrome: { storage: { local: { get: (_keys, cb) => cb({}), set() {} }, onChanged: { addListener() {} } } },
+  };
+  const exposed = source.replace(/\}\)\(\);\s*$/, `
+    context = { videoId: 'video-1', targetLanguage: 'zh-Hans' };
+    takeoverVideoId = 'video-1';
+    subtitleStore.set('0', { start: 0, end: 2, text: 'Hello', translation: '你好' });
+    rebuildSubtitleTimeline();
+    globalThis.state = () => ({ size: subtitleStore.size, timeline: subtitleTimeline.length, takeoverVideoId, context });
+  })();`);
+  vm.runInNewContext(exposed, sandbox);
+  const clear = handlers.get('yst:yt:subtitles-cleared');
+  expect(clear).toBeTypeOf('function');
+  clear({ detail: { videoId: 'other-video', targetLanguage: 'zh-Hans' } });
+  clear({ detail: { videoId: 'video-1', targetLanguage: 'ja' } });
+  expect(sandbox.state().size).toBe(1);
+  clear({ detail: { videoId: 'video-1', targetLanguage: 'zh-Hans' } });
+  expect(sandbox.state()).toMatchObject({ size: 0, timeline: 0, takeoverVideoId: null, context: null });
+  expect(removed).toContain('yst-yt-hide-native');
+});
