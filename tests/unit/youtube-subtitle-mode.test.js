@@ -4,7 +4,7 @@ import vm from 'node:vm';
 import { describe, expect, it } from 'vitest';
 
 const source = readFileSync(resolve(import.meta.dirname, '../../extension/content-youtube.js'), 'utf8');
-function loadPlayer({ items = [], task = null, token = 'token', nativeLanguage = 'zh-Hans', sourceLanguage = 'en', failRead = false, pauseRead, pausePost, onPost } = {}) {
+function loadPlayer({ items = [], task = null, token = 'token', nativeLanguage = 'zh-Hans', sourceLanguage = 'en', failRead = false, pauseRead, pausePost, onPost, pauseCreate, onCreate, created = {}, quote = {} } = {}) {
   const requests = [];
   const events = [];
   const status = { textContent: '', classList: { add() {}, remove() {}, toggle() {} } };
@@ -29,11 +29,17 @@ function loadPlayer({ items = [], task = null, token = 'token', nativeLanguage =
           }
           if (message.method === 'POST') {
             onPost?.();
+            if (message.path === '/api/youtube/subtitle/task') { onCreate?.(); if (pauseCreate) await pauseCreate; }
             if (pausePost) await pausePost;
             if (message.path === '/api/youtube/metadata/translate') {
               return { data: { title: '中文视频标题', description: '中文简介' } };
             }
-            return { data: { taskId: 'task-1', status: 'idle' } };
+            if (message.path === '/api/youtube/subtitle/quote') return { data: {
+              videoId: 'video-1', targetLanguage: nativeLanguage, reuseTaskId: task?.taskId || null,
+              force: JSON.parse(message.body).force, requiredPointCents: 125, freePointCents: 75,
+              payablePointCents: 50, balanceCents: 100, canAfford: true, ...quote
+            } };
+            return { data: { taskId: 'task-1', status: message.path.endsWith('/start') ? 'pending' : 'idle', ...(message.path === '/api/youtube/subtitle/task' ? created : {}) } };
           }
           return { ok: true };
         },
@@ -51,6 +57,10 @@ function loadPlayer({ items = [], task = null, token = 'token', nativeLanguage =
     broadcastContext = (context) => window.dispatchEvent(new CustomEvent('yst:yt:context-ready', { detail: context }));
     globalThis.player = {
       select: setSubtitleMode,
+      confirm: () => confirmSubtitleTranslation(),
+      cancel: () => closePanel(),
+      quote: () => subtitleQuote,
+      details: () => openVideoInDashboard('video-1'),
       resume: resumeSubtitleFetchAfterLogin,
       title: ensureVideoTitleTranslation,
       changeLanguage: changeNativeLanguage,
@@ -83,7 +93,7 @@ describe('YouTube subtitle mode selection', () => {
     await p.select('bilingual');
     expect(p.requests.find(r => r.method === 'GET').path).toContain('targetLanguage=ja');
     expect(JSON.parse(posts(p)[0].body)).toMatchObject({ sourceLanguage: 'en', targetLanguage: 'ja' });
-    expect(dashboards(p)[0].path).toContain('targetLanguage=ja');
+    expect(dashboards(p)).toHaveLength(0);
   });
   it('shows original captions without requesting translation when source and native languages match', async () => {
     const p = loadPlayer({ nativeLanguage: 'ja', sourceLanguage: 'ja', token: null });
@@ -152,18 +162,19 @@ describe('YouTube subtitle mode selection', () => {
     expect(posts(p)).toHaveLength(0);
     expect(dashboards(p)).toHaveLength(0);
   });
-  it('saves an untranslated video and opens translation without forcing regeneration', async () => {
+  it('quotes an untranslated video without starting or forcing regeneration', async () => {
     const p = loadPlayer();
     await p.select('bilingual');
     expect(posts(p)).toHaveLength(1);
     expect(JSON.parse(posts(p)[0].body)).toMatchObject({ videoId: 'video-1', force: false });
-    expect(dashboards(p).map((r) => r.path)).toEqual(['/dashboard?tab=video&videoId=video-1&targetLanguage=zh-Hans']);
+    expect(dashboards(p)).toHaveLength(0);
+    expect(posts(p)[0].path).toBe('/api/youtube/subtitle/quote');
   });
-  it.each(['idle', 'pending', 'running'])('opens an existing %s task without creating another', async (status) => {
+  it.each(['pending', 'running'])('shows an existing %s task without creating another', async (status) => {
     const p = loadPlayer({ task: { taskId: 'existing', status, totalSegments: 2, completedSegments: 0 } });
     await p.select('target');
     expect(posts(p)).toHaveLength(0);
-    expect(dashboards(p)).toHaveLength(1);
+    expect(dashboards(p)).toHaveLength(0);
   });
   it('retries a failed task even when its phase cache contains subtitle items', async () => {
     const p = loadPlayer({
@@ -173,7 +184,7 @@ describe('YouTube subtitle mode selection', () => {
     await p.select('target');
     expect(posts(p)).toHaveLength(1);
     expect(JSON.parse(posts(p)[0].body)).toMatchObject({ videoId: 'video-1', force: false });
-    expect(dashboards(p)).toHaveLength(1);
+    expect(dashboards(p)).toHaveLength(0);
   });
   it.each([null, { taskId: 'old-task', status: 'canceled' }])('retries partial caches with the complete original track when task is %j', async task => {
     const p = loadPlayer({ items: [{ start: 0, end: 1, text: 'Partial', translation: '部分' }], task });
@@ -183,7 +194,7 @@ describe('YouTube subtitle mode selection', () => {
     expect(JSON.parse(posts(p)[0].body)).toMatchObject({
       force: false, subtitles: [{ start: 0, end: 2, text: 'Hello' }],
     });
-    expect(dashboards(p)).toHaveLength(1);
+    expect(dashboards(p)).toHaveLength(0);
   });
   it.each(['source', 'off'])('does not fetch or open translation for %s', async (mode) => {
     const p = loadPlayer();
@@ -195,7 +206,7 @@ describe('YouTube subtitle mode selection', () => {
     await p.select('target');
     expect(posts(p)).toHaveLength(0);
     expect(dashboards(p)).toHaveLength(0);
-    expect(p.status.textContent).toContain('重试');
+    expect(p.status.innerHTML).toContain('重试');
   });
   it('starts login when translation is missing', async () => {
     const p = loadPlayer({ token: null });
@@ -209,7 +220,7 @@ describe('YouTube subtitle mode selection', () => {
     expect(p.events.some((e) => e.type === 'yst:yt:activate-subtitles')).toBe(true);
     expect(p.requests.filter((r) => r.action === 'auth:startRelay')).toHaveLength(0);
   });
-  it('coalesces rapid translated-mode clicks into one navigation', async () => {
+  it('coalesces rapid translated-mode clicks into one quote', async () => {
     let release;
     const pauseRead = new Promise((resolve) => { release = resolve; });
     const p = loadPlayer({ pauseRead });
@@ -218,7 +229,7 @@ describe('YouTube subtitle mode selection', () => {
     release();
     await Promise.all([first, second]);
     expect(posts(p)).toHaveLength(1);
-    expect(dashboards(p)).toHaveLength(1);
+    expect(dashboards(p)).toHaveLength(0);
   });
   it.each(['navigate', 'off'])('ignores a pending check after %s', async (action) => {
     let release;
@@ -238,7 +249,7 @@ describe('YouTube subtitle mode selection', () => {
     p.login();
     await p.resume();
     expect(posts(p)).toHaveLength(1);
-    expect(dashboards(p)).toHaveLength(1);
+    expect(dashboards(p)).toHaveLength(0);
   });
 
   it('fetches and caches the translated video title for the popup', async () => {
@@ -287,9 +298,112 @@ describe('YouTube subtitle mode selection', () => {
     const contextIndex = p.events.findIndex((e) => e.type === 'yst:yt:context-ready');
     const activationIndex = p.events.findIndex((e) => e.type === 'yst:yt:activate-subtitles');
     expect(contextIndex).toBeGreaterThanOrEqual(0);
-    expect(activationIndex).toBeGreaterThan(contextIndex);
-    expect(p.events[activationIndex].detail.videoId).toBe('video-1');
-    expect(dashboards(p)).toHaveLength(1);
+    expect(activationIndex).toBe(-1);
+    expect(posts(p)[0].path).toBe('/api/youtube/subtitle/quote');
+    expect(dashboards(p)).toHaveLength(0);
   });
 
+});
+
+describe('subtitle translation confirmation', () => {
+  it('starts only after confirmation and never opens the dashboard automatically', async () => {
+    const p = loadPlayer();
+    await p.select('target');
+    expect(posts(p).map(r => r.path)).toEqual(['/api/youtube/subtitle/quote']);
+    expect(p.quote().payablePointCents).toBe(50);
+    await p.confirm();
+    expect(posts(p).map(r => r.path)).toEqual([
+      '/api/youtube/subtitle/quote', '/api/youtube/subtitle/task', '/api/youtube/subtitle/task/task-1/start'
+    ]);
+    expect(dashboards(p)).toHaveLength(0);
+    p.details();
+    expect(dashboards(p)).toHaveLength(1);
+  });
+  it('canceling a quote cannot start translation', async () => {
+    const p = loadPlayer();
+    await p.select('target');
+    p.cancel();
+    await p.confirm();
+    expect(posts(p).map(r => r.path)).toEqual(['/api/youtube/subtitle/quote']);
+  });
+  it('resumes an existing failed task without creating another', async () => {
+    const p = loadPlayer({ task: { taskId: 'failed', status: 'failed' }, quote: { alreadyCharged: true, requiredPointCents: 0, payablePointCents: 0 } });
+    await p.select('target');
+    await p.confirm();
+    expect(posts(p).map(r => r.path)).toEqual(['/api/youtube/subtitle/quote', '/api/youtube/subtitle/task/failed/start']);
+  });
+  it('prevents repeated confirmations from starting twice', async () => {
+    const p = loadPlayer();
+    await p.select('target');
+    await Promise.all([p.confirm(), p.confirm()]);
+    expect(posts(p).filter(r => r.path.endsWith('/start'))).toHaveLength(1);
+  });
+  it.each(['navigate', 'off', 'cancel'])('invalidates confirmation after %s', async action => {
+    const p = loadPlayer();
+    await p.select('target');
+    if (action === 'off') await p.select('off'); else p[action]();
+    await p.confirm();
+    expect(posts(p)).toHaveLength(1);
+  });
+  it('does not start when the balance is insufficient', async () => {
+    const p = loadPlayer({ quote: { canAfford: false } });
+    await p.select('target');
+    await p.confirm();
+    expect(posts(p)).toHaveLength(1);
+  });
+});
+
+describe('subtitle progress presentation', () => {
+  it.each(['factual_correction', 'resegmentation'])('keeps %s in progress until full completion', async phase => {
+    const p = loadPlayer({ task: { taskId: 'running', status: 'running', totalSegments: 2, completedSegments: 2, phase } });
+    await p.select('target');
+    expect(p.status.innerHTML).toContain('正在完善字幕');
+    expect(p.status.innerHTML).toContain('查看后台详情');
+    expect(p.status.innerHTML).not.toContain('100%');
+    expect(posts(p)).toHaveLength(0);
+  });
+  it('invalidates a quote on native-language change', async () => {
+    const p = loadPlayer();
+    await p.select('target');
+    await p.changeLanguage('ja');
+    await p.confirm();
+    expect(posts(p)).toHaveLength(1);
+  });
+  it('does not restore a quote canceled while its request is in flight', async () => {
+    let release, onPost;
+    const pausePost = new Promise(resolve => { release = resolve; });
+    const posted = new Promise(resolve => { onPost = resolve; });
+    const p = loadPlayer({ pausePost, onPost });
+    const pending = p.select('target');
+    await posted;
+    p.cancel();
+    release();
+    await pending;
+    expect(p.quote()).toBeNull();
+    await p.confirm();
+    expect(posts(p)).toHaveLength(1);
+  });
+});
+
+it('cannot revive a canceled confirmation by turning subtitles off and back on during creation', async () => {
+  let release, onCreate;
+  const pauseCreate = new Promise(resolve => { release = resolve; });
+  const creating = new Promise(resolve => { onCreate = resolve; });
+  const p = loadPlayer({ pauseCreate, onCreate });
+  await p.select('target');
+  const confirmation = p.confirm();
+  await creating;
+  await p.select('off');
+  await p.select('target');
+  release();
+  await confirmation;
+  expect(posts(p).filter(r => r.path.endsWith('/start'))).toHaveLength(0);
+});
+
+it.each([{ reused: true }, { billing: { estimatedChargePointCents: 200 } }])('requires a fresh quote when task creation changes the approved task or price: %j', async created => {
+  const p = loadPlayer({ created });
+  await p.select('target');
+  await p.confirm();
+  expect(posts(p).filter(r => r.path.endsWith('/start'))).toHaveLength(0);
+  expect(p.status.innerHTML).toContain('重新确认');
 });

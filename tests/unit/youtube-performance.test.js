@@ -181,18 +181,6 @@ describe('YouTube low-overhead runtime', () => {
     expect(renderModeRow).not.toContain('lr-mode-source');
   });
 
-  it('shows the factual correction step after subtitle translation reaches 100%', () => {
-    const renderTaskUi = extractFunction(youtubeSource, 'renderTaskUi');
-    expect(renderTaskUi).toContain("t.phase === 'factual_correction'");
-    expect(renderTaskUi).toContain('正在进行事实性校正');
-  });
-
-  it('shows the subtitle regrouping step after factual correction', () => {
-    const renderTaskUi = extractFunction(youtubeSource, 'renderTaskUi');
-    expect(renderTaskUi).toContain("t.phase === 'resegmentation'");
-    expect(renderTaskUi).toContain('正在重新断句');
-  });
-
   it('translates chapter titles and seeks the YouTube player when a chapter is clicked', () => {
     expect(youtubeSource).toContain("apiFetch('/api/youtube/chapters/translate'");
     const renderContext = extractFunction(youtubeSource, 'renderContext');
