@@ -27,7 +27,7 @@ export async function injectYouTubeControls(chrome, tabId) {
   const missing = frameIds.filter(id => !ready.has(id));
   if (missing.length) await chrome.scripting.executeScript({
     target: { tabId, frameIds: missing },
-    files: ['config.js', 'messages.js', 'content-youtube.js', 'content-youtube-subtitles.js'],
+    files: ['config.js', 'languages.js', 'messages.js', 'content-youtube.js', 'content-youtube-subtitles.js'],
   });
 }
 

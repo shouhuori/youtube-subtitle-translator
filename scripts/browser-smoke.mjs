@@ -8,7 +8,7 @@ import path from 'node:path';
   const profile = await fs.mkdtemp(path.join(tmpdir(), 'yst-browser-profile-'));
   const context = await chromium.launchPersistentContext(profile, {
     executablePath: chromium.executablePath(),
-    viewport: { width: 352, height: 490 },
+    viewport: { width: 352, height: 620 },
     headless: true,
     args: [`--disable-extensions-except=${root}/dist/production`, `--load-extension=${root}/dist/production`],
   });
@@ -18,11 +18,25 @@ import path from 'node:path';
     console.log('Extension worker:', worker?.url() || 'not available in installed Chrome');
     if (!worker) throw new Error('Extension did not load; install Chrome for Testing with npm exec playwright-core install chromium --no-shell');
     const id = new URL(worker.url()).host;
+    const setup = await context.newPage();
+    await setup.goto(`chrome-extension://${id}/onboarding.html`);
+    await setup.locator('#nativeLanguage').filter({ has: setup.locator('option[value="zh-Hans"]') }).waitFor();
+    if (await setup.locator('#nativeLanguage').inputValue() !== 'zh-Hans') throw new Error('Native language default is incorrect');
+    await setup.locator('#nativeLanguage').selectOption('ja');
+    await setup.getByRole('button', { name: '保存母语', exact: true }).click();
+    await setup.getByText('已保存。字幕将翻译成你选择的母语。', { exact: true }).waitFor();
+    await setup.close();
     const page = await context.newPage();
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(`chrome-extension://${id}/popup.html`);
     await page.getByText('尚未登录', { exact: true }).waitFor();
+    if (await page.locator('#nativeLanguage').inputValue() !== 'ja') throw new Error('Saved native language not restored');
+    await page.locator('#nativeLanguage').selectOption('en');
+    await page.getByText('已保存。字幕将翻译成你选择的母语。', { exact: true }).waitFor();
+    const preferences = await worker.evaluate(() => chrome.storage.local.get(['nativeLanguage', 'nativeLanguageConfigured']));
+    if (preferences.nativeLanguage !== 'en' || !preferences.nativeLanguageConfigured) throw new Error('Native language changes were not persisted');
+    console.log('PASS first-install language setup and later popup changes');
     await page.locator('body').screenshot({ path: `${root}/docs/popup-preview.png` });
     await page.getByRole('button', { name: '字幕翻译', exact: true }).click();
     await page.getByRole('status').filter({ hasText: '请先打开一个 YouTube 视频' }).waitFor();

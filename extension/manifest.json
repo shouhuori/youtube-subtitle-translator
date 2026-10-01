@@ -13,6 +13,7 @@
     "*://www.youtube.com/*", "*://m.youtube.com/*", "*://www.youtube-nocookie.com/*"
   ],
   "background": { "service_worker": "background.js", "type": "module" },
+  "options_ui": { "page": "onboarding.html", "open_in_tab": true },
   "content_scripts": [
     {
       "matches": ["*://www.youtube.com/*", "*://m.youtube.com/*", "*://www.youtube-nocookie.com/*"],
@@ -21,7 +22,7 @@
     },
     {
       "matches": ["*://www.youtube.com/*", "*://m.youtube.com/*", "*://www.youtube-nocookie.com/*"],
-      "js": ["config.js", "messages.js", "content-youtube.js", "content-youtube-subtitles.js"],
+      "js": ["config.js", "languages.js", "messages.js", "content-youtube.js", "content-youtube-subtitles.js"],
       "run_at": "document_end", "all_frames": true
     },
     {

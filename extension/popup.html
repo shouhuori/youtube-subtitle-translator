@@ -17,6 +17,11 @@
     <button id="transcriptBtn" class="secondary"><span>视频转写与总结</span><span aria-hidden="true">→</span></button>
     <p class="hint">在 YouTube 视频页使用。转写与总结将在 LingRead 中打开。</p>
     <p id="status" role="status" aria-live="polite" hidden></p>
+    <form id="languageForm" data-autosave="true" class="language-settings">
+      <label for="nativeLanguage">母语（字幕翻译目标）</label>
+      <select id="nativeLanguage"></select>
+      <p id="languageStatus" role="status" aria-live="polite"></p>
+    </form>
     <section class="account" aria-label="LingRead 账号">
       <div><span class="eyebrow">LINGREAD 账号</span><p id="accountLabel">正在读取登录状态</p></div>
       <button id="loginBtn" class="small">登录</button>
@@ -31,6 +36,8 @@
     <span id="version"></span>
   </footer>
   <script src="config.js"></script>
+  <script src="languages.js"></script>
+  <script src="language-settings.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

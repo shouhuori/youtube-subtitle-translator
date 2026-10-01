@@ -150,8 +150,8 @@ describe('YouTube low-overhead runtime', () => {
   it('uses the subtitle translation label and AI correction hint', () => {
     expect(youtubeSource).toContain("const ICON_LABEL = '字幕翻译'");
     expect(youtubeSource).toContain("btn.title = 'AI翻译矫正'");
-    expect(subtitleSource).toContain('字幕未翻译，请选择双语或仅中文');
-    expect(youtubeSource).toContain("const SUBTITLE_MODE_LABELS = { bilingual: '双语', target: '仅中文', off: '关闭' }");
+    expect(subtitleSource).toContain('字幕未翻译，请选择双语或仅译文');
+    expect(youtubeSource).toContain("const SUBTITLE_MODE_LABELS = { bilingual: '双语', target: '仅译文', off: '关闭' }");
     expect(youtubeSource).not.toContain('仅原文');
   });
 
@@ -159,7 +159,7 @@ describe('YouTube low-overhead runtime', () => {
     const renderContext = extractFunction(youtubeSource, 'renderContext');
     const renderTaskUi = extractFunction(youtubeSource, 'renderTaskUi');
     expect(renderContext).toContain('显示模式（Shift+B 切换）');
-    expect(youtubeSource).not.toContain('字幕已就绪（${cachedSubtitleItemsCount} 条），选择双语或仅中文即可加载');
+    expect(youtubeSource).not.toContain('字幕已就绪（${cachedSubtitleItemsCount} 条），选择双语或仅译文即可加载');
     expect(renderTaskUi).not.toContain('字幕已加载（${cachedSubtitleItemsCount} 条），可在上方切换显示模式');
   });
 
@@ -279,7 +279,7 @@ describe('YouTube low-overhead runtime', () => {
   it('uses navigation events instead of permanent DOM and URL polling', () => {
     expect(youtubeSource).not.toContain('function watchControlBar');
     const startSection = youtubeSource.slice(
-      youtubeSource.indexOf('  function start()'),
+      youtubeSource.indexOf('  async function start()'),
       youtubeSource.indexOf("  if (document.readyState === 'loading')"),
     );
     expect(startSection).not.toContain('setInterval(() =>');

@@ -8,12 +8,15 @@ export async function checkExtension(root) {
   const manifest = JSON.parse(await readFile(resolve(root, 'manifest.json'), 'utf8'));
   const referenced = new Set([
     manifest.background.service_worker, manifest.action.default_popup,
+    ...(manifest.options_ui ? [manifest.options_ui.page] : []),
     ...Object.values(manifest.icons), ...Object.values(manifest.action.default_icon),
     ...manifest.content_scripts.flatMap(entry => [...(entry.js || []), ...(entry.css || [])]),
     ...manifest.web_accessible_resources.flatMap(entry => entry.resources),
   ]);
-  const html = await readFile(resolve(root, manifest.action.default_popup), 'utf8');
-  for (const match of html.matchAll(/(?:src|href)="([^"#]+)"/g)) referenced.add(match[1]);
+  for (const page of [manifest.action.default_popup, manifest.options_ui?.page].filter(Boolean)) {
+    const html = await readFile(resolve(root, page), 'utf8');
+    for (const match of html.matchAll(/(?:src|href)="([^"#]+)"/g)) referenced.add(match[1]);
+  }
   for (const path of referenced) {
     if (!(await stat(resolve(root, path))).isFile()) throw new Error(`Missing extension resource: ${path}`);
   }

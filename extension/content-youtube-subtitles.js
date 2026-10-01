@@ -6,11 +6,11 @@
 //   - 接收 yst:yt:context-ready 拿到视频上下文（含已合并的原始字幕轨）
 //   - 接收 yst:yt:subtitles-data 拿到服务端已翻译矫正的字幕条目并合并
 //   - 监听 video timeupdate，匹配并渲染当前应显示的字幕
-//   - 双语 / 仅中文 / 关闭三种模式，持久化在 chrome.storage.local
+//   - 双语 / 仅译文 / 关闭三种模式，持久化在 chrome.storage.local
 //
 // 事件（与 content-youtube.js 通过 window CustomEvent 通信）：
 //   in:  yst:yt:context-ready   { detail: VideoContext }      // 原文就位
-//        yst:yt:subtitles-data  { detail: { videoId, items } } // 译文增量
+//        yst:yt:subtitles-data  { detail: { videoId, targetLanguage, items } } // 译文增量
 //        yst:yt:context-cleared
 //        yst:yt:set-mode        { detail: { mode } }
 //        yst:yt:activate-subtitles { detail: { videoId } }      // 用户主动接管字幕
@@ -286,6 +286,7 @@
 
   // 也处理旧缓存与翻译中的临时字幕；保留小数和名称内部的点。
   function formatCaptionText(text) {
+    if (!/^zh\b/i.test(context?.targetLanguage || 'zh-Hans')) return (text || '').replace(/\s+/g, ' ').trim();
     return (text || '').replace(/[。．]|\./g, (char, index, value) => {
       if (char === '.' && /[A-Za-z0-9]/.test(value[index - 1] || '') && /[A-Za-z0-9]/.test(value[index + 1] || '')) return char;
       return '';
@@ -322,12 +323,16 @@
     const targetText = formatCaptionText(item.translation);
     const hasTranslation = !!targetText;
     const translating = taskStatus === 'pending' || taskStatus === 'running';
-    const pendingText = translating ? '翻译中…' : '字幕未翻译，请选择双语或仅中文';
+    const pendingText = translating ? '翻译中…' : '字幕未翻译，请选择双语或仅译文';
+    const sameLanguage = window.YST_LANGUAGES.sameLanguage(context?.subtitles?.language, context?.targetLanguage || 'zh-Hans');
+    const duplicateText = hasTranslation && sourceText.replace(/[\p{P}\s]/gu, '') === targetText.replace(/[\p{P}\s]/gu, '');
     let html = '';
-    if (mode === 'bilingual') {
+    if (sameLanguage) {
+      if (sourceText) html = `<div class="lr-line lr-line-source">${escapeHtml(sourceText)}</div>`;
+    } else if (mode === 'bilingual') {
       if (sourceText) html += `<div class="lr-line lr-line-source">${escapeHtml(sourceText)}</div>`;
       if (hasTranslation) {
-        html += `<div class="lr-line lr-line-target">${escapeHtml(targetText)}</div>`;
+        if (!duplicateText || !sourceText) html += `<div class="lr-line lr-line-target">${escapeHtml(targetText)}</div>`;
       } else {
         html += `<div class="lr-line lr-line-target lr-line-pending">${escapeHtml(pendingText)}</div>`;
       }
@@ -337,7 +342,7 @@
       if (hasTranslation) {
         html += `<div class="lr-line lr-line-target">${escapeHtml(targetText)}</div>`;
       } else if (sourceText) {
-        // 仅中文模式下译文还没到，先把原文以淡色显示，避免画面空白
+        // 仅译文模式下译文还没到，先把原文以淡色显示，避免画面空白
         html += `<div class="lr-line lr-line-source lr-line-pending">${escapeHtml(sourceText)}</div>`;
       }
     }
@@ -476,6 +481,7 @@
   window.addEventListener('yst:yt:subtitles-data', (e) => {
     const d = e && e.detail;
     if (!d) return;
+    if (d.targetLanguage && context?.targetLanguage && d.targetLanguage !== context.targetLanguage) return;
     ingestItems(d.videoId, d.items);
   });
 

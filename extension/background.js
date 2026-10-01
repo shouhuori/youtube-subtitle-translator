@@ -3,6 +3,7 @@ import { createApiProxy } from './lib/api.js';
 import { createAuthClient, RELAY_ALARM } from './lib/auth.js';
 import { openSharedPage } from './lib/navigation.js';
 import { injectYouTubeControls, isYouTubePlayerUrl, openPlayerAction } from './lib/player.js';
+import { initializeLanguageSettings } from './lib/preferences.js';
 
 const config = globalThis.CONFIG;
 const proxy = createApiProxy(chrome, config);
@@ -32,7 +33,8 @@ chrome.webNavigation.onCompleted.addListener(details => {
     void injectYouTubeControls(chrome, details.tabId).catch(() => {});
   }
 });
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener(details => {
+  void initializeLanguageSettings(chrome, details).catch(() => {});
   void chrome.tabs.query({}).then(tabs => Promise.all(tabs.map(tab =>
     injectYouTubeControls(chrome, tab.id).catch(() => {})
   )));

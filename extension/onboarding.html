@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>选择母语 — YouTube Subtitle Translator</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body class="onboarding">
+  <div class="setup-card">
+    <header><img src="icons/icon128.png" width="44" height="44" alt=""><div><h1>YouTube Subtitle Translator</h1><p>Transcript &amp; Summary</p></div></header>
+    <main>
+      <h2>选择你的母语</h2>
+      <p class="intro">双语字幕将显示视频原文和母语译文。</p>
+      <form id="languageForm" data-onboarding="true" class="language-settings">
+        <label for="nativeLanguage">母语</label>
+        <select id="nativeLanguage" aria-describedby="languageHelp"></select>
+        <p id="languageHelp" class="hint">默认简体中文。以后可以在插件中随时修改。</p>
+        <button class="primary" type="submit">保存母语</button>
+        <p id="languageStatus" role="status" aria-live="polite"></p>
+      </form>
+      <button id="continueBtn" class="secondary" hidden>开始使用</button>
+    </main>
+  </div>
+  <script src="languages.js"></script>
+  <script src="language-settings.js"></script>
+</body>
+</html>

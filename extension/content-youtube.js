@@ -12,7 +12,17 @@
   const BRAND_ICON_URL = window.APP_CONFIG?.BRAND?.logoUrl || chrome.runtime.getURL('icons/icon48.png');
   const SUBTITLE_MODE_KEY = 'youtubeSubtitleMode';
   const SUBTITLE_MODES = ['bilingual', 'target', 'off'];
-  const SUBTITLE_MODE_LABELS = { bilingual: '双语', target: '仅中文', off: '关闭' };
+  const SUBTITLE_MODE_LABELS = { bilingual: '双语', target: '仅译文', off: '关闭' };
+  const languages = window.YST_LANGUAGES;
+  let nativeLanguage = 'zh-Hans';
+  const nativeLanguageReady = new Promise(resolve => {
+    try {
+      chrome.storage.local.get(['nativeLanguage'], saved => {
+        nativeLanguage = languages.normalize(saved?.nativeLanguage);
+        resolve();
+      });
+    } catch { resolve(); }
+  });
 
   let currentVideoId = null;
   let currentContext = null; // 见 buildContext 返回结构
@@ -26,12 +36,14 @@
   let subtitleTaskFromAuth = false;
   let cachedSubtitleItemsReady = false;
   let cachedSubtitleItemsIncomplete = false;
+  let cachedSubtitleSourceMismatch = false;
   let cachedSubtitleItemsCount = 0;
   let subtitleTakeoverVideoId = null;
   let taskPollTimer = null;
   let subtitleStateRequestId = 0;
   let pendingSubtitleFetchAfterLogin = false;
   let subtitleSelectionRequest = null;
+  let nativeLanguageChangeRequest = null;
   let chapterTranslations = new Map();
   let chapterTranslationRequest = null;
   let translatedVideoTitles = new Map();
@@ -123,6 +135,9 @@
     const captions = playerResponse.captions || {};
     const tracklist = captions.playerCaptionsTracklistRenderer || {};
     const captionTracks = Array.isArray(tracklist.captionTracks) ? tracklist.captionTracks : [];
+    const audio = tracklist.audioTracks?.[tracklist.defaultAudioTrackIndex ?? 0];
+    const audioCaption = (audio?.captionTrackIndices || []).map(index => captionTracks[index]).find(track => track?.kind === 'asr')
+      || captionTracks[audio?.defaultCaptionTrackIndex];
 
     const description =
       vd.shortDescription ||
@@ -137,6 +152,7 @@
       duration: parseInt(vd.lengthSeconds || '0', 10) || 0,
       isLive: !!vd.isLive || !!vd.isLiveContent,
       hasNativeSubtitles: captionTracks.length > 0,
+      originalLanguage: vd.defaultAudioLanguage || audio?.languageCode || audioCaption?.languageCode || vd.defaultLanguage || null,
       captionTracks: captionTracks.map((t) => ({
         languageCode: t.languageCode || '',
         name:
@@ -155,21 +171,15 @@
     return runs.map((r) => (r && r.text) || '').join('');
   }
 
-  // §5.2 字幕轨选择优先级
-  function selectCaptionTrack(tracks, preferredLang = 'zh') {
+  // 原语言由音轨信息确定，缺失时参考 ASR；母语不参与原文轨选择。
+  function selectCaptionTrack(tracks, originalLanguage = null) {
     if (!tracks || !tracks.length) return null;
-    const startsWith = (lang) => (t) => (t.languageCode || '').toLowerCase().startsWith(lang);
-    const isAsr = (t) => t.kind === 'asr';
-    const isManual = (t) => t.kind !== 'asr';
-
-    return (
-      tracks.find((t) => startsWith(preferredLang)(t) && isManual(t)) ||
-      tracks.find((t) => startsWith(preferredLang)(t) && isAsr(t)) ||
-      tracks.find((t) => startsWith('en')(t) && isManual(t)) ||
-      tracks.find((t) => startsWith('en')(t) && isAsr(t)) ||
-      tracks[0] ||
-      null
-    );
+    const originalTracks = tracks.filter(track => !/[?&]tlang=/.test(track.baseUrl || ''));
+    const language = originalLanguage || originalTracks.find(track => track.kind === 'asr')?.languageCode;
+    const same = track => window.YST_LANGUAGES.sameLanguage(track.languageCode, language);
+    return originalTracks.find(track => same(track) && track.kind !== 'asr')
+      || originalTracks.find(same) || originalTracks.find(track => track.kind === 'asr')
+      || originalTracks[0] || null;
   }
 
   async function fetchCaptionSegments(track, videoId) {
@@ -311,7 +321,7 @@
     const fromPlayer = extractFromPlayerResponse(bridgePayload && bridgePayload.playerResponse);
     if (!fromPlayer || !fromPlayer.videoId) return null;
 
-    const track = selectCaptionTrack(fromPlayer.captionTracks);
+    const track = selectCaptionTrack(fromPlayer.captionTracks, fromPlayer.originalLanguage);
     let subtitles = null;
     if (track) {
       const segments = await fetchCaptionSegments(track, fromPlayer.videoId);
@@ -344,7 +354,7 @@
     if (!ctx) return;
     if (ctx.videoId) lastBroadcastVideoId = ctx.videoId;
     try {
-      window.dispatchEvent(new CustomEvent('yst:yt:context-ready', { detail: ctx }));
+      window.dispatchEvent(new CustomEvent('yst:yt:context-ready', { detail: { ...ctx, targetLanguage: nativeLanguage } }));
     } catch (_e) {}
   }
 
@@ -992,10 +1002,12 @@
     subtitleTaskFromAuth = false;
     cachedSubtitleItemsReady = false;
     cachedSubtitleItemsIncomplete = false;
+    cachedSubtitleSourceMismatch = false;
     subtitleStateRequestId++;
     cachedSubtitleItemsCount = 0;
     subtitleTakeoverVideoId = null;
     subtitleSelectionRequest = null;
+    nativeLanguageChangeRequest = null;
     chapterTranslations = new Map();
     chapterTranslationRequest = null;
     translatedVideoTitles = new Map();
@@ -1177,6 +1189,7 @@
   }
 
   async function ensureVideoTitleTranslation(ctx) {
+    await nativeLanguageReady;
     if (!ctx || !ctx.videoId || !ctx.title) return;
     if (translatedVideoTitles.has(ctx.videoId)) return;
     if (videoTitleTranslationRequest?.videoId === ctx.videoId) return;
@@ -1194,7 +1207,7 @@
           videoId: ctx.videoId,
           title: ctx.title,
           description: ctx.description || '',
-          targetLanguage: 'zh-Hans',
+          targetLanguage: nativeLanguage,
         }),
       });
       if (videoTitleTranslationRequest !== request || getVideoIdFromUrl() !== ctx.videoId) return;
@@ -1215,6 +1228,7 @@
   }
 
   async function ensureChapterTranslations(ctx) {
+    await nativeLanguageReady;
     if (!ctx || !ctx.videoId || !Array.isArray(ctx.chapters) || !ctx.chapters.length) return;
     const chapters = ctx.chapters
       .filter((chapter) => chapter && typeof chapter.title === 'string' && Number.isFinite(Number(chapter.startTime)))
@@ -1236,7 +1250,7 @@
         body: JSON.stringify({
           videoId: ctx.videoId,
           chapters,
-          targetLanguage: 'zh-Hans',
+          targetLanguage: nativeLanguage,
         }),
       });
       if (chapterTranslationRequest !== request || getVideoIdFromUrl() !== ctx.videoId) return;
@@ -1372,7 +1386,7 @@
   function openVideoInDashboard(videoId) {
     const siteUrl = (window.APP_CONFIG && window.APP_CONFIG.SITE_URL) || 'https://lingread.app';
     const trimmed = siteUrl.endsWith('/') ? siteUrl.slice(0, -1) : siteUrl;
-    const q = `tab=video&videoId=${encodeURIComponent(videoId)}&targetLanguage=zh-Hans`;
+    const q = `tab=video&videoId=${encodeURIComponent(videoId)}&targetLanguage=${encodeURIComponent(nativeLanguage)}`;
     const path = `/dashboard?${q}`;
     const action = window.LINGREAD_MESSAGES?.MSG?.NAV_OPEN_HISTORY || 'nav:openHistory';
     try {
@@ -1645,15 +1659,25 @@
     return true;
   }
 
+  function isSubtitleSourceCompatible(ctx, items) {
+    const cachedScript = languages.textLanguage(items.map(item => item?.text || '').join(' '));
+    const sourceText = ctx?.subtitles?.segments?.map(item => item.text || '').join(' ') || '';
+    const sourceScript = languages.textLanguage(sourceText)
+      || (/^(en|es|fr|de|pt|it|id|vi)(-|$)/i.test(ctx?.subtitles?.language || '') ? 'latin' : null);
+    return !cachedScript || !sourceScript || cachedScript === sourceScript;
+  }
+
   // 拉取该视频已翻译字幕 + 最新任务摘要：把字幕推给渲染器，更新面板与按钮提示，
   // 并按任务状态启停轮询。任务在服务端后台跑，关掉面板/页面不影响。
   async function refreshSubtitleState(videoId) {
+    await nativeLanguageReady;
     if (!videoId || getVideoIdFromUrl() !== videoId) return false;
     const requestId = ++subtitleStateRequestId;
-    const isCurrent = () => requestId === subtitleStateRequestId && getVideoIdFromUrl() === videoId;
+    const targetLanguage = nativeLanguage;
+    const isCurrent = () => requestId === subtitleStateRequestId && getVideoIdFromUrl() === videoId && nativeLanguage === targetLanguage;
     try {
       const hasAuthToken = !!(await getAuthTokenLocal());
-      const data = await apiFetch(`/api/youtube/subtitle/${encodeURIComponent(videoId)}?targetLanguage=zh-Hans`, { method: 'GET' });
+      const data = await apiFetch(`/api/youtube/subtitle/${encodeURIComponent(videoId)}?targetLanguage=${encodeURIComponent(targetLanguage)}`, { method: 'GET' });
       if (!isCurrent()) return false;
       const items = Array.isArray(data.items) ? data.items : [];
       const task = hasAuthToken ? data.task || null : null;
@@ -1674,14 +1698,16 @@
       }
       subtitleTask = task;
       subtitleTaskFromAuth = hasAuthToken && !!subtitleTask;
+      cachedSubtitleSourceMismatch = !!(items.length && sourceContext?.subtitles?.segments?.length
+        && !isSubtitleSourceCompatible(sourceContext, items));
       cachedSubtitleItemsReady = mayBeComplete
-        && hasCompleteSubtitleCoverage(sourceContext?.subtitles?.segments, items);
+        && !cachedSubtitleSourceMismatch && hasCompleteSubtitleCoverage(sourceContext?.subtitles?.segments, items);
       cachedSubtitleItemsIncomplete = mayBeComplete
         && !!sourceContext?.subtitles?.segments?.length && !cachedSubtitleItemsReady;
       // 无法读取原轨时是校验失败，不是缺少译文；不要误建重复翻译任务。
       if (mayBeComplete && !sourceContext?.subtitles?.segments?.length) return false;
       const inProgress = task && ['pending', 'running'].includes(task.status);
-      const usableItems = cachedSubtitleItemsReady || inProgress ? items : [];
+      const usableItems = !cachedSubtitleSourceMismatch && (cachedSubtitleItemsReady || inProgress) ? items : [];
       cachedSubtitleItemsCount = usableItems.length;
       if (!usableItems.length && currentContext?.videoId === videoId && currentContext.subtitles?.fromCache) {
         currentContext = null;
@@ -1709,7 +1735,7 @@
       } catch (_e) {}
       if (usableItems.length) {
         try {
-          window.dispatchEvent(new CustomEvent('yst:yt:subtitles-data', { detail: { videoId, items: usableItems } }));
+          window.dispatchEvent(new CustomEvent('yst:yt:subtitles-data', { detail: { videoId, targetLanguage, items: usableItems } }));
         } catch (_e) {}
       }
       if (panelOpen && shouldRenderContext) renderContext();
@@ -1729,6 +1755,7 @@
   }
 
   async function createTask(force) {
+    await nativeLanguageReady;
     const c = currentContext;
     if (!c || !c.subtitles || !Array.isArray(c.subtitles.segments) || !c.subtitles.segments.length) return null;
     if (c.subtitles.fromCache) return null;
@@ -1740,7 +1767,7 @@
         subtitles: c.subtitles.segments,
         source: c.subtitles.isAutoGenerated ? 'youtube_asr' : 'manual',
         sourceLanguage: c.subtitles.language || 'en',
-        targetLanguage: 'zh-Hans',
+        targetLanguage: nativeLanguage,
         title: c.title,
         description: c.description,
         channelName: c.channelName,
@@ -1756,7 +1783,7 @@
     let c = currentContext;
     const currentVid = getVideoIdFromUrl();
     if (cachedSubtitleItemsReady && c?.videoId === currentVid && c?.subtitles?.fromCache) {
-      if (statusEl) { statusEl.classList.remove('lr-error'); statusEl.textContent = '中文字幕已就绪，正在打开控制台'; }
+      if (statusEl) { statusEl.classList.remove('lr-error'); statusEl.textContent = '字幕译文已就绪，正在打开控制台'; }
       openVideoInDashboard(currentVid);
       return;
     }
@@ -1817,6 +1844,7 @@
   }
 
   async function ensureSubtitleTranslation(options = {}) {
+    await nativeLanguageReady;
     const videoId = getVideoIdFromUrl();
     if (!videoId || !['bilingual', 'target'].includes(currentMode)) return;
     if (subtitleSelectionRequest?.videoId === videoId) return;
@@ -1832,11 +1860,26 @@
       statusEl.textContent = text;
     };
     try {
+      if (!currentContext || currentContext.videoId !== videoId || currentContext.subtitles?.fromCache) {
+        const ctx = await buildContext();
+        if (!isCurrent()) return;
+        if (ctx?.videoId === videoId && ctx.subtitles?.segments?.length) {
+          currentContext = ctx;
+          broadcastContext(ctx);
+        }
+      }
+      if (currentContext?.videoId === videoId && !currentContext.subtitles?.fromCache
+        && languages.sameLanguage(currentContext.subtitles?.language, nativeLanguage)) {
+        broadcastContext(currentContext);
+        activateSubtitleTakeover(videoId);
+        setStatus('视频原语言与你的母语一致，显示原文字幕');
+        return;
+      }
       setStatus('正在检查字幕翻译…');
       const refreshed = await refreshSubtitleState(videoId);
       if (!isCurrent()) return;
       if (!refreshed) {
-        setStatus('字幕检查失败，请重新选择双语或仅中文重试', true);
+        setStatus('字幕检查失败，请重新选择双语或仅译文重试', true);
         return;
       }
       if (cachedSubtitleItemsReady) {
@@ -1863,11 +1906,11 @@
       }
       activateSubtitleTakeover(videoId);
       const t = subtitleTask;
-      if (subtitleTaskFromAuth && t?.taskId && ['idle', 'pending', 'running'].includes(t.status)) {
+      if (!cachedSubtitleSourceMismatch && subtitleTaskFromAuth && t?.taskId && ['idle', 'pending', 'running'].includes(t.status)) {
         openVideoInDashboard(videoId);
         return;
       }
-      await saveSubtitleTaskAndOpenDashboard(false, statusEl, { ...options, isCurrent });
+      await saveSubtitleTaskAndOpenDashboard(cachedSubtitleSourceMismatch, statusEl, { ...options, isCurrent });
     } catch (_e) {
       // 保存失败时，已有流程会显示错误并按需启动登录。
     } finally {
@@ -1891,7 +1934,7 @@
       && subtitleTakeoverVideoId === currentContext.videoId
     );
     if (cachedSubtitleItemsIncomplete) {
-      setStatus('字幕翻译不完整，重新选择双语或仅中文可继续翻译', true);
+      setStatus('字幕翻译不完整，重新选择双语或仅译文可继续翻译', true);
       return;
     }
     if (cachedSubtitleItemsReady && !takeoverActive) {
@@ -1907,7 +1950,7 @@
     } else if (t.status === 'idle') {
       setStatus('字幕任务已保存，请在控制台文章库中确认点数后开始翻译');
     } else if (t.status === 'canceled') {
-      setStatus('上次任务已取消，选择双语或仅中文可重新翻译');
+      setStatus('上次任务已取消，选择双语或仅译文可重新翻译');
     } else if (t.status === 'pending' || t.status === 'running') {
       if (t.phase === 'resegmentation') {
         setStatus('事实性校正已完成，正在重新断句，可关闭页面，任务在后台继续');
@@ -1922,7 +1965,7 @@
         ? ''
         : '字幕任务已完成，但字幕数据尚未加载，可稍后重试');
     } else if (t.status === 'failed') {
-      setStatus('翻译任务失败，重新选择双语或仅中文可重试', true);
+      setStatus('翻译任务失败，重新选择双语或仅译文可重试', true);
     }
   }
 
@@ -1941,10 +1984,10 @@
 
   function renderSubtitleBadge(c) {
     if (c.subtitles && c.subtitles.fromCache) {
-      return `<span class="lr-badge lr-badge-info">中文字幕已就绪</span>`;
+      return `<span class="lr-badge lr-badge-info">字幕译文已就绪</span>`;
     }
     if (cachedSubtitleItemsReady) {
-      return `<span class="lr-badge lr-badge-info">中文字幕已就绪</span>`;
+      return `<span class="lr-badge lr-badge-info">字幕译文已就绪</span>`;
     }
     if (!c.subtitles) {
       // 走到这里通常说明 ytInitialPlayerResponse 里有字幕轨但 timedtext 拉不下来。
@@ -1952,7 +1995,7 @@
       return `<span class="lr-badge lr-badge-warn">字幕加载失败，请刷新或检查控制台</span>`;
     }
     if (c.subtitles.isAutoGenerated) {
-      return `<span class="lr-badge lr-badge-warn">YouTube 自动字幕（待生成中文字幕）</span>`;
+      return `<span class="lr-badge lr-badge-warn">YouTube 自动字幕（待生成译文）</span>`;
     }
     return `<span class="lr-badge lr-badge-info">人工字幕 · ${escapeHtml(c.subtitles.language || '')}</span>`;
   }
@@ -2077,7 +2120,37 @@
   }
 
   // ── 启动 ───────────────────────────────────────────────
-  function start() {
+  async function changeNativeLanguage(value) {
+    const next = languages.normalize(value);
+    if (next === nativeLanguage) return;
+    nativeLanguage = next;
+    const videoId = getVideoIdFromUrl();
+    const wasActive = subtitleTakeoverVideoId === videoId
+      || (nativeLanguageChangeRequest?.videoId === videoId && nativeLanguageChangeRequest.wasActive);
+    let sourceContext = currentContext?.videoId === videoId && !currentContext.subtitles?.fromCache ? currentContext : null;
+    resetVideoScopedState(videoId);
+    const request = { videoId, wasActive };
+    nativeLanguageChangeRequest = request;
+    const isCurrent = () => nativeLanguageChangeRequest === request && nativeLanguage === next && getVideoIdFromUrl() === videoId;
+    if (videoId && wasActive && !sourceContext) {
+      sourceContext = await buildContext();
+      if (!isCurrent()) return;
+      if (sourceContext?.videoId !== videoId || sourceContext.subtitles?.fromCache) sourceContext = null;
+    }
+    currentContext = sourceContext;
+    if (sourceContext) broadcastContext(sourceContext);
+    if (panelOpen && sourceContext) renderContext();
+    if (videoId && wasActive && currentMode !== 'off') {
+      if (!sourceContext || !languages.sameLanguage(sourceContext.subtitles?.language, nativeLanguage)) {
+        await refreshSubtitleState(videoId);
+      }
+      if (isCurrent() && currentMode !== 'off') activateSubtitleTakeover(videoId);
+    }
+    if (isCurrent()) nativeLanguageChangeRequest = null;
+  }
+
+  async function start() {
+    await nativeLanguageReady;
     // 读字幕模式（默认 bilingual）
     try {
       chrome.storage.local.get([SUBTITLE_MODE_KEY], (r) => {
@@ -2091,6 +2164,7 @@
       });
       chrome.storage.onChanged.addListener((changes, area) => {
         if (area !== 'local') return;
+        if (changes.nativeLanguage) void changeNativeLanguage(changes.nativeLanguage.newValue);
         if (changes[SUBTITLE_MODE_KEY]) {
           const stored = changes[SUBTITLE_MODE_KEY].newValue;
           const m = normalizeSubtitleMode(stored);

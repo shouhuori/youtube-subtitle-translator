@@ -1,15 +1,20 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { expect, it } from 'vitest';
+import vm from 'node:vm';
+const scope = {};
+vm.runInNewContext(readFileSync('extension/languages.js', 'utf8'), scope);
 
 const source = readFileSync(resolve(import.meta.dirname, '../../extension/content-youtube.js'), 'utf8');
 const extract = name => source.match(new RegExp(`  (?:async )?function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n  \\}`))?.[0] || '';
 
 function loadState(data, { context = null, native = null, token = null } = {}) {
-  return new Function('data', 'initialContext', 'native', 'token', `
+  return new Function('data', 'initialContext', 'native', 'token', 'languages', `
+    const nativeLanguageReady = Promise.resolve(), nativeLanguage = 'zh-Hans';
     let currentContext = initialContext, subtitleTask, subtitleTaskFromAuth;
     let cachedSubtitleItemsReady = false, cachedSubtitleItemsCount = 0;
     let cachedSubtitleItemsIncomplete = false;
+    let cachedSubtitleSourceMismatch = false;
     let subtitleStateRequestId = 0;
     let panelOpen = false;
     const events = [], broadcasts = [];
@@ -24,6 +29,7 @@ function loadState(data, { context = null, native = null, token = null } = {}) {
     class CustomEvent { constructor(type, init) { this.type = type; this.detail = init?.detail; } }
     const window = { dispatchEvent: event => events.push(event) };
     ${extract('hasCompleteSubtitleCoverage')}
+    ${extract('isSubtitleSourceCompatible')}
     ${extract('buildCachedSubtitleContext')}
     ${extract('refreshSubtitleState')}
     return {
@@ -31,7 +37,7 @@ function loadState(data, { context = null, native = null, token = null } = {}) {
       respondWith(value) { data = value; },
       state: () => ({ ready: cachedSubtitleItemsReady, incomplete: cachedSubtitleItemsIncomplete, task: subtitleTask, context: currentContext, events, broadcasts }),
     };
-  `)(data, context, native, token);
+  `)(data, context, native, token, scope.YST_LANGUAGES);
 }
 
 const raw = { videoId: 'video', subtitles: { segments: [
@@ -106,8 +112,7 @@ it('ignores an older cache check that finishes loading its source after a newer 
   const native = new Promise(resolve => { resolveNative = resolve; });
   const runtime = loadState({ items: translated, task: null }, { native, token: 'test' });
   const oldRefresh = runtime.refresh();
-  await Promise.resolve();
-  await Promise.resolve();
+  for (let i = 0; i < 5; i++) await Promise.resolve();
   runtime.respondWith({ items: translated.slice(0, 1), task: { taskId: 'new-task', status: 'running' } });
   await runtime.refresh();
   expect(runtime.state().task.status).toBe('running');

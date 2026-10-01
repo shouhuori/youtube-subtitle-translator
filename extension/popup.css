@@ -27,3 +27,12 @@ footer { display: flex; align-items: center; gap: 9px; padding: 13px 22px; backg
 footer button { padding: 0; color: #796c71; font-size: 11px; background: none; }
 #version { margin-left: auto; font-size: 10px; }
 [hidden] { display: none !important; }
+.language-settings { margin-bottom: 18px; }
+.language-settings label { display: block; font-size: 12px; margin-bottom: 8px; color: #6b6065; }
+.language-settings select { font: inherit; width: 100%; padding: 9px 10px; border: 1px solid #eadcde; border-radius: 7px; background: #fff; color: #292329; }
+.language-settings select:focus-visible { outline: 3px solid #f19a9e; outline-offset: 2px; }
+#languageStatus { font-size: 11px; line-height: 1.6; color: #796c71; margin: 6px 0 0; }
+.onboarding { width: auto; min-height: 100vh; display: grid; place-items: center; background: #faf8f8; padding: 24px; }
+.setup-card { width: min(100%, 440px); background: #fff; border: 1px solid #f1e8e8; border-radius: 14px; overflow: hidden; box-shadow: 0 8px 32px #47232908; }
+.setup-card main { padding: 24px; }
+.setup-card h2 { font-size: 20px; margin: 0 0 12px; }
