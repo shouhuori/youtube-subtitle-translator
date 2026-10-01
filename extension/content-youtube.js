@@ -1707,7 +1707,9 @@
       if (!isCurrent()) return false;
       const items = Array.isArray(data.items) ? data.items : [];
       const task = hasAuthToken ? data.task || null : null;
-      const mayBeComplete = items.length > 0 && (!task || task.status === 'completed');
+      // 翻译与后续校正/断句是不同阶段。后处理失败或取消不代表已写入的
+      // 完整译文不可用；终止任务也必须按原轨核对覆盖，不能仅凭任务状态丢弃。
+      const mayBeComplete = items.length > 0 && (!task || ['completed', 'failed', 'canceled'].includes(task.status));
       let shouldRenderContext = false;
       let sourceContext = currentContext?.videoId === videoId && !currentContext.subtitles?.fromCache
         ? currentContext : null;
@@ -1728,6 +1730,10 @@
         && !isSubtitleSourceCompatible(sourceContext, items));
       cachedSubtitleItemsReady = mayBeComplete
         && !cachedSubtitleSourceMismatch && hasCompleteSubtitleCoverage(sourceContext?.subtitles?.segments, items);
+      if (cachedSubtitleItemsReady) {
+        subtitleQuote = null;
+        subtitleActionError = '';
+      }
       cachedSubtitleItemsIncomplete = mayBeComplete
         && !!sourceContext?.subtitles?.segments?.length && !cachedSubtitleItemsReady;
       // 无法读取原轨时是校验失败，不是缺少译文；不要误建重复翻译任务。
@@ -1923,6 +1929,12 @@
       setStatus('正在估算翻译点数…');
       const quote = await apiFetch('/api/youtube/subtitle/quote', { method: 'POST', body: JSON.stringify(input) });
       if (!isCurrent()) return;
+      // 报价期间轮询可能已加载完整译文；不要让旧报价再次要求用户启动。
+      if (cachedSubtitleItemsReady) {
+        activateSubtitleTakeover(videoId);
+        renderTaskUi();
+        return;
+      }
       if (quote?.videoId !== videoId || quote.targetLanguage !== nativeLanguage
         || !Number.isInteger(quote.requiredPointCents) || quote.requiredPointCents < 0
         || !Number.isInteger(quote.payablePointCents) || quote.payablePointCents < 0
@@ -1933,6 +1945,11 @@
       renderTaskUi();
     } catch (err) {
       if (!isCurrent()) return;
+      if (cachedSubtitleItemsReady) {
+        activateSubtitleTakeover(videoId);
+        renderTaskUi();
+        return;
+      }
       if (err?.status === 401) {
         try { chrome.storage.local.remove(['auth_token', 'auth_user']); } catch (_e) {}
         pendingSubtitleFetchAfterLogin = options.allowRelayLogin === false ? false : videoId;
@@ -1989,7 +2006,9 @@
         <progress class="yst-progress" ${finishing ? '' : `value="${pct}"`} max="100" aria-label="字幕翻译进度"></progress>
         <p>可关闭窗口，任务会在后台继续。</p>${details}`;
     } else if (cachedSubtitleItemsReady) {
-      statusEl.innerHTML = `<div>字幕翻译已完成</div>${details}`;
+      const message = t?.status === 'failed' ? '字幕已可用，后续处理未完成。'
+        : t?.status === 'canceled' ? '字幕已可用，后续处理已取消。' : '字幕翻译已完成';
+      statusEl.innerHTML = `<div>${message}</div>${details}`;
     } else if (sameLanguage) {
       statusEl.textContent = '视频原语言与你的母语一致，显示原文字幕';
     } else if (cachedSubtitleItemsIncomplete || ['failed', 'canceled'].includes(t?.status)) {

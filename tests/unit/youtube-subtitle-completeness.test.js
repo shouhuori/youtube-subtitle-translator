@@ -12,6 +12,7 @@ function loadState(data, { context = null, native = null, token = null } = {}) {
   return new Function('data', 'initialContext', 'native', 'token', 'languages', `
     const nativeLanguageReady = Promise.resolve(), nativeLanguage = 'zh-Hans';
     let currentContext = initialContext, subtitleTask, subtitleTaskFromAuth;
+    let subtitleQuote = null, subtitleActionError = "";
     let cachedSubtitleItemsReady = false, cachedSubtitleItemsCount = 0;
     let cachedSubtitleItemsIncomplete = false;
     let cachedSubtitleSourceMismatch = false;
@@ -25,7 +26,8 @@ function loadState(data, { context = null, native = null, token = null } = {}) {
     const broadcastContext = ctx => broadcasts.push(ctx);
     const document = { querySelector: () => null, title: 'Video' };
     const renderContext = () => {}, renderTaskUi = () => {}, updateButtonBadge = () => {};
-    const startTaskPoll = () => {}, stopTaskPoll = () => {};
+    let polling = false;
+    const startTaskPoll = () => { polling = true; }, stopTaskPoll = () => { polling = false; };
     class CustomEvent { constructor(type, init) { this.type = type; this.detail = init?.detail; } }
     const window = { dispatchEvent: event => events.push(event) };
     ${extract('hasCompleteSubtitleCoverage')}
@@ -35,7 +37,7 @@ function loadState(data, { context = null, native = null, token = null } = {}) {
     return {
       refresh: () => refreshSubtitleState('video'),
       respondWith(value) { data = value; },
-      state: () => ({ ready: cachedSubtitleItemsReady, incomplete: cachedSubtitleItemsIncomplete, task: subtitleTask, context: currentContext, events, broadcasts }),
+      state: () => ({ polling, ready: cachedSubtitleItemsReady, incomplete: cachedSubtitleItemsIncomplete, task: subtitleTask, context: currentContext, events, broadcasts }),
     };
   `)(data, context, native, token, scope.YST_LANGUAGES);
 }
@@ -120,4 +122,29 @@ it('ignores an older cache check that finishes loading its source after a newer 
   await oldRefresh;
   expect(runtime.state().task?.status).toBe('running');
   expect(runtime.state().ready).toBe(false);
+});
+
+it.each(['failed', 'canceled'])('uses fully translated captions even when later processing is %s', async status => {
+  const runtime = loadState({ items: translated, task: { status } }, { context: raw, token: 'test' });
+  await runtime.refresh();
+  expect(runtime.state().ready).toBe(true);
+  expect(runtime.state().incomplete).toBe(false);
+  expect(runtime.state().events.find(event => event.type === 'yst:yt:subtitles-data').detail.items).toEqual(translated);
+});
+
+it('ends processing and preserves usable subtitles when regrouping fails after translation', async () => {
+  const runtime = loadState({ items: translated, task: { status: 'running', phase: 'resegmentation' } }, { context: raw, token: 'test' });
+  await runtime.refresh();
+  expect(runtime.state().polling).toBe(true);
+  runtime.respondWith({ items: translated, task: { status: 'failed', error: '重新断句未完成' } });
+  await runtime.refresh();
+  expect(runtime.state().polling).toBe(false);
+  expect(runtime.state().ready).toBe(true);
+});
+
+it('still rejects genuinely missing subtitles from a failed task', async () => {
+  const runtime = loadState({ items: translated.slice(0, 2), task: { status: 'failed' } }, { context: raw, token: 'test' });
+  await runtime.refresh();
+  expect(runtime.state().ready).toBe(false);
+  expect(runtime.state().events.some(event => event.type === 'yst:yt:subtitles-data')).toBe(false);
 });

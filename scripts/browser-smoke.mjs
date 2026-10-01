@@ -162,12 +162,48 @@ import path from 'node:path';
     await video.locator('#yst-yt-subtitles-layer').getByText('Hello and welcome.', { exact: true }).waitFor();
     await video.locator('#yst-yt-subtitles-layer').getByText('你好，欢迎', { exact: true }).waitFor();
     await video.screenshot({ path: `${root}/docs/subtitle-completed-preview.png` });
+    // A translation can be complete even if subsequent regrouping fails.
+    // Reopen while regrouping is running, then observe the terminal failure.
+    const startsBeforeFailure = subtitleFixture.requests.filter(r => r.path.endsWith('/start')).length;
+    const quotesBeforeFailure = subtitleFixture.requests.filter(r => r.path.endsWith('/quote')).length;
+    subtitleFixture.task = { ...subtitleFixture.task, status: 'running', phase: 'resegmentation' };
+    await video.getByRole('button', { name: '关闭', exact: true }).click();
+    await video.locator('#yst-yt-panel').waitFor({ state: 'hidden' });
+    await video.locator('#yst-yt-button').click();
+    await video.getByText('正在完善字幕…', { exact: true }).waitFor();
+    subtitleFixture.task = { ...subtitleFixture.task, status: 'failed', error: '重新断句未完成' };
+    await video.getByText('字幕已可用，后续处理未完成。', { exact: true }).waitFor({ timeout: 12000 });
+    await video.locator('#yst-yt-subtitles-layer').getByText('你好，欢迎', { exact: true }).waitFor();
+    if ((await video.locator('#yst-yt-button').textContent()).includes('处理中')) throw new Error('Terminal task left a processing badge');
+    if (await video.getByRole('button', { name: '确认翻译', exact: true }).count()) throw new Error('Complete subtitles prompted another charge');
+    await video.screenshot({ path: `${root}/docs/subtitle-available-preview.png` });
+    await video.getByRole('button', { name: '关闭', exact: true }).click();
+    await video.locator('#yst-yt-panel').waitFor({ state: 'hidden' });
+    await video.locator('#yst-yt-button').click();
+    await video.getByText('字幕已可用，后续处理未完成。', { exact: true }).waitFor();
+    await video.getByRole('tab', { name: '仅译文', exact: true }).click();
+    if (subtitleFixture.requests.filter(r => r.path.endsWith('/start')).length !== startsBeforeFailure
+      || subtitleFixture.requests.filter(r => r.path.endsWith('/quote')).length !== quotesBeforeFailure) throw new Error('Reopening playable subtitles requested a retry');
+    console.log('PASS complete translated captions remain playable after regrouping fails; processing badge clears and reopening does not quote or restart');
     await context.route('https://lingread.app/dashboard?**', route => route.fulfill({ contentType: 'text/html', body: '<html><body>Dashboard fixture</body></html>' }));
+    // Extension-created tabs can navigate before Playwright installs page routing.
+    // Capture the requested destination and create a blank tab first, so the
+    // website response stays controlled and cannot redirect to the live login.
+    await worker.evaluate(() => {
+      const createTab = chrome.tabs.create.bind(chrome.tabs);
+      chrome.tabs.create = options => {
+        globalThis.fixtureDashboardDestination = options.url;
+        return createTab({ ...options, url: 'about:blank' });
+      };
+    });
     const dashboardTab = context.waitForEvent('page');
     await video.getByRole('button', { name: '查看后台详情', exact: true }).click();
     const details = await dashboardTab;
+    const destination = await worker.evaluate(() => globalThis.fixtureDashboardDestination);
+    if (new URL(destination).searchParams.get('videoId') !== 'fixture-video') throw new Error('Incorrect requested dashboard destination');
+    await details.goto(destination);
     await details.waitForURL('https://lingread.app/dashboard?**');
-    if (!details.url().includes('videoId=fixture-video')) throw new Error('Wrong dashboard video');
+    if (!details.url().includes('videoId=fixture-video')) throw new Error(`Wrong dashboard video: ${details.url()} (player: ${video.url()})`);
     console.log('PASS actual video entry, read-only quote, cancel, confirm once, inline progress, completed captions, display preference, bilingual mode and optional dashboard details (controlled API fixtures)');
 
     const data = await worker.evaluate(() => ({ name: chrome.runtime.getManifest().name, config: globalThis.CONFIG, token: undefined }));
