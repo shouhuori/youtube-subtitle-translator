@@ -33,6 +33,7 @@ function loadState(data, { context = null, native = null, token = null } = {}) {
     ${extract('hasCompleteSubtitleCoverage')}
     ${extract('isSubtitleSourceCompatible')}
     ${extract('buildCachedSubtitleContext')}
+    ${extract('recordWatchActivity')}
     ${extract('refreshSubtitleState')}
     return {
       refresh: () => refreshSubtitleState('video'),
